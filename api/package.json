@@ -1,7 +1,6 @@
 {
   "name": "bridge-api-gateway",
   "version": "1.0.0",
-  "type": "module",
   "description": "Bridge.xyz API Gateway for Vercel",
   "engines": {
     "node": ">=18"

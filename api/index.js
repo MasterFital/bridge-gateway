@@ -29,9 +29,9 @@
  * @license MIT
  */
 
-import express from 'express';
-import cors from 'cors';
-import crypto from 'crypto';
+const express = require('express');
+const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -1425,5 +1425,5 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// Exportar para Vercel (ES modules)
-export default app;
+// Exportar para Vercel
+module.exports = app;

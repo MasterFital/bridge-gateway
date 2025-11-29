@@ -1,0 +1,736 @@
+// ============================================
+// BRIDGE.XYZ API GATEWAY - COMPLETO
+// ============================================
+
+const express = require('express');
+const cors = require('cors');
+const crypto = require('crypto');
+const app = express();
+
+// ============================================
+// MIDDLEWARES
+// ============================================
+
+app.use(cors());
+app.use(express.json());
+
+// Logging middleware
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  next();
+});
+
+// Autenticación (opcional pero recomendado)
+const authMiddleware = (req, res, next) => {
+  const token = req.headers['x-api-token'];
+  const validToken = process.env.MI_TOKEN_SECRETO;
+  
+  if (validToken && token !== validToken) {
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Token inválido o faltante' 
+    });
+  }
+  
+  next();
+};
+
+// Rate limiting simple
+const rateLimits = new Map();
+const rateLimitMiddleware = (req, res, next) => {
+  const ip = req.ip;
+  const now = Date.now();
+  const windowMs = 60000; // 1 minuto
+  const maxRequests = 100;
+  
+  if (!rateLimits.has(ip)) {
+    rateLimits.set(ip, []);
+  }
+  
+  const requests = rateLimits.get(ip).filter(time => now - time < windowMs);
+  
+  if (requests.length >= maxRequests) {
+    return res.status(429).json({ 
+      success: false, 
+      error: 'Demasiadas peticiones. Intenta en 1 minuto.' 
+    });
+  }
+  
+  requests.push(now);
+  rateLimits.set(ip, requests);
+  next();
+};
+
+app.use(rateLimitMiddleware);
+
+// ============================================
+// CONFIGURACIÓN BRIDGE
+// ============================================
+
+const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+const BRIDGE_URL = 'https://api.bridge.xyz/v0';
+
+// Helper para hacer requests a Bridge
+async function bridgeRequest(endpoint, options = {}) {
+  const url = `${BRIDGE_URL}${endpoint}`;
+  const method = options.method || 'GET';
+  
+  const headers = {
+    'Api-Key': BRIDGE_API_KEY,
+    'Content-Type': 'application/json',
+    ...options.headers
+  };
+  
+  // Idempotency key para prevenir duplicados
+  if (method === 'POST' && !headers['Idempotency-Key']) {
+    headers['Idempotency-Key'] = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+  }
+  
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return {
+        success: false,
+        error: data.message || 'Error en Bridge API',
+        details: data
+      };
+    }
+    
+    return {
+      success: true,
+      data
+    };
+  } catch (error) {
+    console.error('Bridge API Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ============================================
+// 1. CUSTOMERS (CLIENTES)
+// ============================================
+
+// Crear cliente
+app.post('/api/customers', authMiddleware, async (req, res) => {
+  const { email, type, first_name, last_name, business_name } = req.body;
+  
+  if (!email || !type) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Email y type son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/customers', {
+    method: 'POST',
+    body: {
+      email,
+      type, // 'individual' o 'business'
+      ...(type === 'individual' ? { first_name, last_name } : { business_name })
+    }
+  });
+  
+  res.json(result);
+});
+
+// Obtener cliente
+app.get('/api/customers/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/customers/${req.params.id}`);
+  res.json(result);
+});
+
+// Actualizar cliente
+app.patch('/api/customers/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/customers/${req.params.id}`, {
+    method: 'PATCH',
+    body: req.body
+  });
+  res.json(result);
+});
+
+// Listar clientes
+app.get('/api/customers', authMiddleware, async (req, res) => {
+  const { limit = 10, offset = 0 } = req.query;
+  const result = await bridgeRequest(`/customers?limit=${limit}&offset=${offset}`);
+  res.json(result);
+});
+
+// ============================================
+// 2. WALLETS (BILLETERAS)
+// ============================================
+
+// Crear wallet
+app.post('/api/wallets', authMiddleware, async (req, res) => {
+  const { customer_id, currency, chain } = req.body;
+  
+  if (!customer_id || !currency || !chain) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'customer_id, currency y chain son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/wallets', {
+    method: 'POST',
+    body: { customer_id, currency, chain }
+  });
+  
+  res.json(result);
+});
+
+// Obtener wallet
+app.get('/api/wallets/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/wallets/${req.params.id}`);
+  res.json(result);
+});
+
+// Balance de wallet
+app.get('/api/wallets/:id/balance', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/wallets/${req.params.id}/balance`);
+  res.json(result);
+});
+
+// Listar wallets de un cliente
+app.get('/api/customers/:customer_id/wallets', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/customers/${req.params.customer_id}/wallets`);
+  res.json(result);
+});
+
+// Transacciones de wallet
+app.get('/api/wallets/:id/transactions', authMiddleware, async (req, res) => {
+  const { limit = 10, offset = 0 } = req.query;
+  const result = await bridgeRequest(
+    `/wallets/${req.params.id}/transactions?limit=${limit}&offset=${offset}`
+  );
+  res.json(result);
+});
+
+// ============================================
+// 3. EXTERNAL ACCOUNTS (CUENTAS BANCARIAS)
+// ============================================
+
+// Crear cuenta bancaria
+app.post('/api/external-accounts', authMiddleware, async (req, res) => {
+  const { customer_id, account, routing, currency, country } = req.body;
+  
+  if (!customer_id || !account || !currency) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'customer_id, account y currency son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/external_accounts', {
+    method: 'POST',
+    body: {
+      customer_id,
+      account: {
+        account_number: account,
+        routing_number: routing,
+        currency,
+        country: country || 'US'
+      }
+    }
+  });
+  
+  res.json(result);
+});
+
+// Obtener cuenta bancaria
+app.get('/api/external-accounts/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/external_accounts/${req.params.id}`);
+  res.json(result);
+});
+
+// Listar cuentas de un cliente
+app.get('/api/customers/:customer_id/external-accounts', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/customers/${req.params.customer_id}/external_accounts`);
+  res.json(result);
+});
+
+// Eliminar cuenta
+app.delete('/api/external-accounts/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/external_accounts/${req.params.id}`, {
+    method: 'DELETE'
+  });
+  res.json(result);
+});
+
+// ============================================
+// 4. TRANSFERS (TRANSFERENCIAS/CONVERSIONES)
+// ============================================
+
+// Crear transfer
+app.post('/api/transfers', authMiddleware, async (req, res) => {
+  const { 
+    amount, 
+    customer_id, 
+    source_type,
+    source_id,
+    destination_type,
+    destination_id,
+    source_currency,
+    destination_currency,
+    source_chain,
+    destination_chain,
+    developer_fee 
+  } = req.body;
+  
+  if (!amount || !customer_id) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'amount y customer_id son requeridos' 
+    });
+  }
+  
+  const transferBody = {
+    amount,
+    on_behalf_of: customer_id,
+    source: {
+      payment_rail: source_type, // 'ach', 'wire', 'ethereum', 'solana', etc
+      currency: source_currency
+    },
+    destination: {
+      payment_rail: destination_type,
+      currency: destination_currency
+    }
+  };
+  
+  // Agregar source_id si es cuenta bancaria o wallet
+  if (source_id) {
+    if (source_type === 'ach' || source_type === 'wire') {
+      transferBody.source.external_account_id = source_id;
+    } else {
+      transferBody.source.from_wallet_id = source_id;
+    }
+  }
+  
+  // Agregar destination_id
+  if (destination_id) {
+    if (destination_type === 'ach' || destination_type === 'wire') {
+      transferBody.destination.external_account_id = destination_id;
+    } else {
+      transferBody.destination.to_wallet_id = destination_id;
+    }
+  }
+  
+  // Agregar chains para crypto
+  if (source_chain) transferBody.source.chain = source_chain;
+  if (destination_chain) transferBody.destination.chain = destination_chain;
+  
+  // Agregar tu comisión
+  if (developer_fee) transferBody.developer_fee = developer_fee;
+  
+  const result = await bridgeRequest('/transfers', {
+    method: 'POST',
+    body: transferBody
+  });
+  
+  res.json(result);
+});
+
+// Obtener transfer
+app.get('/api/transfers/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/transfers/${req.params.id}`);
+  res.json(result);
+});
+
+// Listar transfers de un cliente
+app.get('/api/customers/:customer_id/transfers', authMiddleware, async (req, res) => {
+  const { limit = 10, offset = 0 } = req.query;
+  const result = await bridgeRequest(
+    `/customers/${req.params.customer_id}/transfers?limit=${limit}&offset=${offset}`
+  );
+  res.json(result);
+});
+
+// Cancelar transfer
+app.post('/api/transfers/:id/cancel', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/transfers/${req.params.id}/cancel`, {
+    method: 'POST'
+  });
+  res.json(result);
+});
+
+// ============================================
+// 5. VIRTUAL ACCOUNTS (CUENTAS VIRTUALES)
+// ============================================
+
+// Crear cuenta virtual
+app.post('/api/virtual-accounts', authMiddleware, async (req, res) => {
+  const { customer_id, currency, destination_wallet_id } = req.body;
+  
+  if (!customer_id || !currency) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'customer_id y currency son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/virtual_accounts', {
+    method: 'POST',
+    body: {
+      customer_id,
+      currency, // 'usd', 'eur', 'mxn'
+      destination_wallet_id
+    }
+  });
+  
+  res.json(result);
+});
+
+// Obtener cuenta virtual
+app.get('/api/virtual-accounts/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/virtual_accounts/${req.params.id}`);
+  res.json(result);
+});
+
+// Listar cuentas virtuales de un cliente
+app.get('/api/customers/:customer_id/virtual-accounts', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/customers/${req.params.customer_id}/virtual_accounts`);
+  res.json(result);
+});
+
+// ============================================
+// 6. LIQUIDATION ADDRESSES
+// ============================================
+
+// Crear liquidation address
+app.post('/api/liquidation-addresses', authMiddleware, async (req, res) => {
+  const { customer_id, chain, currency, destination_external_account_id } = req.body;
+  
+  if (!customer_id || !chain || !currency) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'customer_id, chain y currency son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/liquidation_addresses', {
+    method: 'POST',
+    body: {
+      customer_id,
+      chain, // 'ethereum', 'solana', 'polygon', etc
+      currency, // 'usdc', 'usdt'
+      destination_external_account_id
+    }
+  });
+  
+  res.json(result);
+});
+
+// Obtener liquidation address
+app.get('/api/liquidation-addresses/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/liquidation_addresses/${req.params.id}`);
+  res.json(result);
+});
+
+// ============================================
+// 7. KYC LINKS
+// ============================================
+
+// Crear KYC link
+app.post('/api/kyc-links', authMiddleware, async (req, res) => {
+  const { customer_id, type } = req.body;
+  
+  if (!customer_id || !type) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'customer_id y type son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/kyc_links', {
+    method: 'POST',
+    body: {
+      customer_id,
+      type // 'individual' o 'business'
+    }
+  });
+  
+  res.json(result);
+});
+
+// Obtener status de KYC
+app.get('/api/customers/:customer_id/kyc-status', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/customers/${req.params.customer_id}/kyc`);
+  res.json(result);
+});
+
+// ============================================
+// 8. CARDS (TARJETAS)
+// ============================================
+
+// Crear tarjeta
+app.post('/api/cards', authMiddleware, async (req, res) => {
+  const { customer_id, wallet_id, type } = req.body;
+  
+  if (!customer_id || !wallet_id) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'customer_id y wallet_id son requeridos' 
+    });
+  }
+  
+  const result = await bridgeRequest('/cards', {
+    method: 'POST',
+    body: {
+      customer_id,
+      wallet_id,
+      type: type || 'virtual' // 'virtual' o 'physical'
+    }
+  });
+  
+  res.json(result);
+});
+
+// Obtener tarjeta
+app.get('/api/cards/:id', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest(`/cards/${req.params.id}`);
+  res.json(result);
+});
+
+// Activar/desactivar tarjeta
+app.patch('/api/cards/:id/status', authMiddleware, async (req, res) => {
+  const { status } = req.body; // 'active' o 'suspended'
+  
+  const result = await bridgeRequest(`/cards/${req.params.id}`, {
+    method: 'PATCH',
+    body: { status }
+  });
+  
+  res.json(result);
+});
+
+// Transacciones de tarjeta
+app.get('/api/cards/:id/transactions', authMiddleware, async (req, res) => {
+  const { limit = 10, offset = 0 } = req.query;
+  const result = await bridgeRequest(
+    `/cards/${req.params.id}/transactions?limit=${limit}&offset=${offset}`
+  );
+  res.json(result);
+});
+
+// ============================================
+// 9. EXCHANGE RATES (TASAS DE CAMBIO)
+// ============================================
+
+// Obtener tasa actual
+app.get('/api/rates', authMiddleware, async (req, res) => {
+  const { from, to, amount } = req.query;
+  
+  if (!from || !to) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'from y to son requeridos' 
+    });
+  }
+  
+  const queryParams = new URLSearchParams({ from, to });
+  if (amount) queryParams.append('amount', amount);
+  
+  const result = await bridgeRequest(`/rates?${queryParams}`);
+  res.json(result);
+});
+
+// ============================================
+// 10. WEBHOOKS
+// ============================================
+
+// Endpoint para recibir webhooks de Bridge
+app.post('/webhooks/bridge', async (req, res) => {
+  const event = req.body;
+  
+  console.log('📥 Webhook recibido:', event.type);
+  
+  // Aquí procesas los eventos según tu lógica
+  switch (event.type) {
+    case 'transfer.completed':
+      console.log('✅ Transfer completado:', event.data.id);
+      // Notificar al cliente, actualizar DB, etc.
+      break;
+      
+    case 'transfer.failed':
+      console.log('❌ Transfer falló:', event.data.id);
+      break;
+      
+    case 'wallet.deposit':
+      console.log('💰 Depósito recibido en wallet:', event.data.wallet_id);
+      break;
+      
+    case 'kyc.approved':
+      console.log('✅ KYC aprobado para:', event.data.customer_id);
+      break;
+      
+    case 'kyc.rejected':
+      console.log('❌ KYC rechazado para:', event.data.customer_id);
+      break;
+      
+    case 'card.transaction':
+      console.log('💳 Transacción de tarjeta:', event.data.amount);
+      break;
+  }
+  
+  res.json({ received: true });
+});
+
+// Configurar webhook en Bridge (llamar una vez al inicio)
+app.post('/api/setup-webhook', authMiddleware, async (req, res) => {
+  const { url } = req.body;
+  
+  if (!url) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'URL del webhook es requerida' 
+    });
+  }
+  
+  const result = await bridgeRequest('/webhooks', {
+    method: 'POST',
+    body: { url }
+  });
+  
+  res.json(result);
+});
+
+// ============================================
+// 11. UTILIDADES
+// ============================================
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'Bridge.xyz API Gateway',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Verificar conexión con Bridge
+app.get('/api/status', authMiddleware, async (req, res) => {
+  const result = await bridgeRequest('/health');
+  res.json({
+    gateway: 'ok',
+    bridge: result.success ? 'ok' : 'error',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Obtener monedas y blockchains soportadas
+app.get('/api/supported', authMiddleware, async (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      fiat_currencies: ['USD', 'EUR', 'GBP', 'MXN', 'BRL'],
+      crypto_currencies: ['USDC', 'USDT', 'EURC'],
+      chains: [
+        'ethereum', 'polygon', 'arbitrum', 'optimism', 'base',
+        'solana', 'stellar', 'tron', 'avalanche'
+      ],
+      payment_rails: {
+        fiat: ['ach', 'wire', 'sepa', 'fps', 'pix', 'spei'],
+        crypto: ['ethereum', 'polygon', 'solana', 'etc']
+      }
+    }
+  });
+});
+
+// ============================================
+// ERROR HANDLER
+// ============================================
+
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ 
+    success: false, 
+    error: 'Error interno del servidor',
+    message: err.message 
+  });
+});
+
+// ============================================
+// INICIAR SERVIDOR
+// ============================================
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`
+  ╔═══════════════════════════════════════╗
+  ║   🚀 BRIDGE.XYZ API GATEWAY ACTIVO   ║
+  ╠═══════════════════════════════════════╣
+  ║   Puerto: ${PORT}                        ║
+  ║   Ambiente: ${process.env.NODE_ENV || 'development'}            ║
+  ╚═══════════════════════════════════════╝
+  
+  📚 Endpoints disponibles:
+  
+  👥 Customers:
+     POST   /api/customers
+     GET    /api/customers/:id
+     PATCH  /api/customers/:id
+     GET    /api/customers
+  
+  💼 Wallets:
+     POST   /api/wallets
+     GET    /api/wallets/:id
+     GET    /api/wallets/:id/balance
+     GET    /api/customers/:customer_id/wallets
+  
+  🏦 External Accounts:
+     POST   /api/external-accounts
+     GET    /api/external-accounts/:id
+     GET    /api/customers/:customer_id/external-accounts
+     DELETE /api/external-accounts/:id
+  
+  💸 Transfers:
+     POST   /api/transfers
+     GET    /api/transfers/:id
+     GET    /api/customers/:customer_id/transfers
+     POST   /api/transfers/:id/cancel
+  
+  🏦 Virtual Accounts:
+     POST   /api/virtual-accounts
+     GET    /api/virtual-accounts/:id
+     GET    /api/customers/:customer_id/virtual-accounts
+  
+  🔗 Liquidation Addresses:
+     POST   /api/liquidation-addresses
+     GET    /api/liquidation-addresses/:id
+  
+  🆔 KYC:
+     POST   /api/kyc-links
+     GET    /api/customers/:customer_id/kyc-status
+  
+  💳 Cards:
+     POST   /api/cards
+     GET    /api/cards/:id
+     PATCH  /api/cards/:id/status
+     GET    /api/cards/:id/transactions
+  
+  📊 Rates:
+     GET    /api/rates
+  
+  🔔 Webhooks:
+     POST   /webhooks/bridge
+     POST   /api/setup-webhook
+  
+  🛠️ Utilidades:
+     GET    /health
+     GET    /api/status
+     GET    /api/supported
+  
+  ✅ Servidor listo para recibir peticiones
+  `);
+});

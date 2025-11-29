@@ -1,0 +1,450 @@
+# 🚀 Bridge.xyz API Gateway - Completo
+
+API Gateway centralizado para integrar Bridge.xyz en tus proyectos. Todas las funcionalidades de Bridge en un solo lugar, seguro y fácil de usar.
+
+## 📋 ¿Qué incluye?
+
+✅ **Customers** - Gestión de clientes  
+✅ **Wallets** - Billeteras custodiales  
+✅ **External Accounts** - Cuentas bancarias  
+✅ **Transfers** - Conversiones fiat ↔ crypto  
+✅ **Virtual Accounts** - Cuentas virtuales (routing + account number)  
+✅ **Liquidation Addresses** - Direcciones de conversión automática  
+✅ **KYC** - Verificación de identidad  
+✅ **Cards** - Tarjetas físicas y virtuales  
+✅ **Exchange Rates** - Tasas de cambio en tiempo real  
+✅ **Webhooks** - Notificaciones automáticas  
+
+---
+
+## 🎯 Instalación en Replit
+
+### Paso 1: Crear el Repl
+
+1. Ve a [replit.com](https://replit.com)
+2. Click en **"Create Repl"**
+3. Selecciona **"Node.js"**
+4. Nombre: `bridge-gateway` (o el que prefieras)
+
+### Paso 2: Copiar los archivos
+
+Crea estos 3 archivos en tu Repl:
+
+1. **`index.js`** - Copia el código del servidor principal
+2. **`package.json`** - Copia las dependencias
+3. **`bridge-client.js`** - Cliente para tus frontends (opcional, puedes copiarlo después)
+
+### Paso 3: Configurar Secrets (Variables de entorno)
+
+1. Click en el ícono de **🔒 Secrets** en el panel izquierdo
+2. Agrega estas variables:
+
+```
+BRIDGE_API_KEY = tu_api_key_de_bridge
+MI_TOKEN_SECRETO = elige_un_token_seguro_aqui
+NODE_ENV = production
+```
+
+**¿Dónde conseguir tu Bridge API Key?**
+- Ve a [dashboard.bridge.xyz](https://dashboard.bridge.xyz)
+- Crea tu cuenta
+- Ve a "API Keys"
+- Copia tu API Key
+
+**¿Qué es MI_TOKEN_SECRETO?**
+- Es un token que TÚ eliges para proteger tu gateway
+- Ejemplo: `mi_super_token_secreto_12345`
+- Tus frontends necesitarán este token para usar el gateway
+
+### Paso 4: Instalar dependencias
+
+Click en el botón **"Run"** arriba. Replit instalará automáticamente:
+- Express
+- CORS
+
+### Paso 5: ¡Listo!
+
+Tu gateway estará corriendo en:
+```
+https://bridge-gateway.tuusuario.repl.co
+```
+
+---
+
+## 🔧 Mantener el Repl siempre activo (UptimeRobot)
+
+Por defecto, Replit "duerme" el servidor después de 1 hora sin uso. Solución gratis:
+
+### Paso 1: Ir a UptimeRobot
+
+1. Ve a [uptimerobot.com](https://uptimerobot.com)
+2. Crea cuenta gratis
+3. Click en **"Add New Monitor"**
+
+### Paso 2: Configurar
+
+- **Monitor Type:** HTTP(s)
+- **Friendly Name:** Bridge Gateway
+- **URL:** `https://bridge-gateway.tuusuario.repl.co/health`
+- **Monitoring Interval:** 5 minutes
+
+### Paso 3: ¡Listo!
+
+UptimeRobot hará ping cada 5 minutos y tu servidor NUNCA se dormirá.
+
+---
+
+## 💻 Usar en tus frontends
+
+### Opción 1: Incluir el cliente en HTML
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mi Tienda</title>
+</head>
+<body>
+  <h1>Procesar Pago</h1>
+  <button onclick="hacerPago()">Pagar con USDC</button>
+  <div id="resultado"></div>
+
+  <!-- Incluir el cliente -->
+  <script src="bridge-client.js"></script>
+  
+  <script>
+    async function hacerPago() {
+      // 1. Crear cliente
+      const cliente = await BridgeClient.crearCliente(
+        'cliente@ejemplo.com',
+        'individual',
+        { first_name: 'Juan' }
+      );
+      
+      console.log('Cliente creado:', cliente);
+      
+      // 2. Crear wallet
+      const wallet = await BridgeClient.crearWallet(
+        cliente.data.id,
+        'usdc',
+        'ethereum'
+      );
+      
+      console.log('Wallet creada:', wallet);
+      
+      document.getElementById('resultado').innerHTML = 
+        `✅ Cliente y wallet creados. Wallet ID: ${wallet.data.id}`;
+    }
+  </script>
+</body>
+</html>
+```
+
+### Opción 2: Flujos completos simplificados
+
+```javascript
+// Onboarding completo (cliente + wallet)
+const resultado = await BridgeClient.onboardCliente(
+  'cliente@ejemplo.com',
+  'Juan Pérez',
+  'usdc',
+  'ethereum'
+);
+
+console.log('Cliente ID:', resultado.cliente.id);
+console.log('Wallet ID:', resultado.wallet.id);
+console.log('Dirección:', resultado.wallet.address);
+```
+
+```javascript
+// On-ramp: USD → USDC
+const transfer = await BridgeClient.fiatACrypto(
+  'cus_12345',      // ID del cliente
+  100,              // $100 USD
+  'ext_acc_67890',  // ID de cuenta bancaria
+  'wal_abcdef'      // ID del wallet destino
+);
+
+console.log('Transfer ID:', transfer.data.id);
+console.log('Estado:', transfer.data.state);
+```
+
+```javascript
+// Off-ramp: USDC → USD
+const transfer = await BridgeClient.cryptoAFiat(
+  'cus_12345',      // ID del cliente
+  100,              // 100 USDC
+  'wal_abcdef',     // ID del wallet origen
+  'ext_acc_67890'   // ID de cuenta bancaria destino
+);
+```
+
+---
+
+## 📚 Ejemplos de uso completos
+
+### Ejemplo 1: E-commerce con pagos en crypto
+
+```javascript
+// Cuando el usuario hace checkout
+async function procesarCheckout(email, monto) {
+  // 1. Crear/obtener cliente
+  const cliente = await BridgeClient.crearCliente(
+    email,
+    'individual'
+  );
+  
+  // 2. Crear wallet USDC
+  const wallet = await BridgeClient.crearWallet(
+    cliente.data.id,
+    'usdc',
+    'polygon' // Más barato que Ethereum
+  );
+  
+  // 3. Mostrar dirección al usuario para que envíe USDC
+  mostrarQR(wallet.data.address, monto);
+  
+  // 4. Esperar el pago (vía webhook)
+  // Cuando llegue el webhook de wallet.deposit, confirmar orden
+}
+```
+
+### Ejemplo 2: Plataforma de remesas
+
+```javascript
+// Usuario quiere enviar $100 USD a México
+async function enviarRemesa(usuarioId, destinatario, monto) {
+  // 1. Crear cuenta virtual MXN para el destinatario
+  const cuentaMXN = await BridgeClient.crearCuentaVirtual(
+    destinatario.customerId,
+    'mxn',
+    destinatario.walletId
+  );
+  
+  // 2. Usuario paga con ACH
+  const transfer = await BridgeClient.crearTransfer({
+    amount: monto.toString(),
+    customer_id: usuarioId,
+    source_type: 'ach',
+    source_id: usuario.externalAccountId,
+    source_currency: 'usd',
+    destination_type: 'spei',
+    destination_id: cuentaMXN.data.id,
+    destination_currency: 'mxn',
+    developer_fee: (monto * 0.02).toFixed(2) // 2% comisión
+  });
+  
+  return transfer;
+}
+```
+
+### Ejemplo 3: Neobank con tarjetas
+
+```javascript
+// Crear cuenta completa con tarjeta virtual
+async function crearCuentaBancaria(email, nombre) {
+  // 1. Onboard cliente
+  const { cliente, wallet } = await BridgeClient.onboardCliente(
+    email,
+    nombre,
+    'usdc',
+    'ethereum'
+  );
+  
+  // 2. Crear cuenta virtual USD
+  const cuentaVirtual = await BridgeClient.crearCuentaVirtual(
+    cliente.id,
+    'usd',
+    wallet.id
+  );
+  
+  // 3. Emitir tarjeta virtual
+  const tarjeta = await BridgeClient.crearTarjeta(
+    cliente.id,
+    wallet.id,
+    'virtual'
+  );
+  
+  return {
+    cliente,
+    wallet,
+    routing: cuentaVirtual.data.routing_number,
+    account: cuentaVirtual.data.account_number,
+    tarjeta: tarjeta.data.card_number
+  };
+}
+```
+
+---
+
+## 🔔 Configurar Webhooks
+
+### En Bridge Dashboard:
+
+1. Ve a [dashboard.bridge.xyz](https://dashboard.bridge.xyz)
+2. Settings → Webhooks
+3. Agrega: `https://tu-repl.usuario.repl.co/webhooks/bridge`
+
+### O programáticamente:
+
+```javascript
+await BridgeClient.request('/api/setup-webhook', {
+  method: 'POST',
+  body: { url: 'https://tu-repl.usuario.repl.co/webhooks/bridge' }
+});
+```
+
+### Eventos que recibirás:
+
+- `transfer.completed` - Transfer completado
+- `transfer.failed` - Transfer falló
+- `wallet.deposit` - Depósito recibido
+- `kyc.approved` - KYC aprobado
+- `kyc.rejected` - KYC rechazado
+- `card.transaction` - Transacción de tarjeta
+
+---
+
+## 🛡️ Seguridad
+
+### 1. NUNCA expongas tu Bridge API Key
+❌ **MALO:**
+```javascript
+// En tu frontend (INSEGURO)
+fetch('https://api.bridge.xyz/v0/customers', {
+  headers: { 'Api-Key': 'sk_live_123456789' } // ← CUALQUIERA LO VE
+});
+```
+
+✅ **BUENO:**
+```javascript
+// En tu frontend (SEGURO)
+const cliente = await BridgeClient.crearCliente('email@ejemplo.com', 'individual');
+// La API Key está segura en tu backend
+```
+
+### 2. Usa el token de autenticación
+
+En `bridge-client.js`, configura tu token:
+```javascript
+const API_TOKEN = 'tu_token_secreto_aqui';
+```
+
+Este token debe ser el mismo que pusiste en `MI_TOKEN_SECRETO` en Secrets.
+
+### 3. Rate limiting
+
+El gateway tiene límite de 100 peticiones por IP por minuto. Si necesitas más:
+
+1. Aumenta el límite en `index.js`:
+```javascript
+const maxRequests = 100; // Cambia este número
+```
+
+2. O usa Replit Hacker ($7/mes) para más recursos
+
+---
+
+## 📊 Monitoreo
+
+### Health check
+```bash
+curl https://tu-repl.usuario.repl.co/health
+```
+
+Respuesta:
+```json
+{
+  "status": "ok",
+  "service": "Bridge.xyz API Gateway",
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+### Status completo
+```javascript
+const status = await BridgeClient.verificarStatus();
+console.log(status);
+```
+
+Respuesta:
+```json
+{
+  "gateway": "ok",
+  "bridge": "ok",
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### Error: "Token inválido"
+- Verifica que `MI_TOKEN_SECRETO` en Secrets sea igual al `API_TOKEN` en `bridge-client.js`
+
+### Error: "Bridge API error"
+- Verifica que tu `BRIDGE_API_KEY` sea correcta
+- Verifica que tu cuenta de Bridge esté activa
+
+### El Repl se duerme
+- Configura UptimeRobot (ver arriba)
+- O actualiza a Replit Hacker ($7/mes) con Always On
+
+### "Too many requests"
+- Estás excediendo el rate limit
+- Espera 1 minuto o aumenta el límite en el código
+
+---
+
+## 💰 Costos
+
+### Replit:
+- **Gratis:** Funciona bien con UptimeRobot
+- **Hacker ($7/mes):** Always On, más recursos, dominio custom
+
+### Bridge.xyz:
+- Consulta los fees en [bridge.xyz/pricing](https://bridge.xyz/pricing)
+- Puedes agregar tu propia comisión con `developer_fee`
+
+---
+
+## 🚀 Migrar a Vercel (opcional)
+
+Si después quieres producción más robusta:
+
+1. Descarga el Repl (3 puntos → Download as ZIP)
+2. Sube a GitHub
+3. Importa en Vercel
+4. Agrega las mismas variables de entorno
+5. Deploy
+
+---
+
+## 📞 Soporte
+
+- **Bridge.xyz Docs:** [apidocs.bridge.xyz](https://apidocs.bridge.xyz)
+- **Bridge Support:** support@bridge.xyz
+- **Replit Docs:** [docs.replit.com](https://docs.replit.com)
+
+---
+
+## ✅ Checklist de configuración
+
+- [ ] Crear Repl en replit.com
+- [ ] Copiar `index.js`, `package.json`, `bridge-client.js`
+- [ ] Configurar Secrets (`BRIDGE_API_KEY`, `MI_TOKEN_SECRETO`)
+- [ ] Presionar "Run"
+- [ ] Copiar URL del Repl
+- [ ] Actualizar `GATEWAY_URL` en `bridge-client.js`
+- [ ] Configurar UptimeRobot
+- [ ] Configurar webhook en Bridge Dashboard
+- [ ] ¡Empezar a construir!
+
+---
+
+## 🎉 ¡Listo!
+
+Tu API Gateway está completo y listo para usar. Ahora puedes integrar pagos con stablecoins en cualquier aplicación web de forma segura y fácil.
+
+**¿Preguntas?** Revisa la documentación de Bridge o el código incluye comentarios detallados.

@@ -1,0 +1,329 @@
+// ============================================
+// BRIDGE CLIENT - Para usar en tus frontends
+// ============================================
+
+const GATEWAY_URL = 'https://tu-repl-backend.usuario.repl.co';
+const API_TOKEN = 'tu_token_secreto_aqui'; // El mismo que configuraste en Secrets
+
+class BridgeClient {
+  
+  // Helper para hacer requests al gateway
+  static async request(endpoint, options = {}) {
+    try {
+      const response = await fetch(`${GATEWAY_URL}${endpoint}`, {
+        method: options.method || 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-token': API_TOKEN,
+          ...options.headers
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined
+      });
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error en Bridge Client:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // ============================================
+  // CUSTOMERS (CLIENTES)
+  // ============================================
+  
+  static async crearCliente(email, type, datos = {}) {
+    return await this.request('/api/customers', {
+      method: 'POST',
+      body: { email, type, ...datos }
+    });
+  }
+  
+  static async obtenerCliente(customerId) {
+    return await this.request(`/api/customers/${customerId}`);
+  }
+  
+  static async actualizarCliente(customerId, datos) {
+    return await this.request(`/api/customers/${customerId}`, {
+      method: 'PATCH',
+      body: datos
+    });
+  }
+  
+  static async listarClientes(limit = 10, offset = 0) {
+    return await this.request(`/api/customers?limit=${limit}&offset=${offset}`);
+  }
+  
+  // ============================================
+  // WALLETS (BILLETERAS)
+  // ============================================
+  
+  static async crearWallet(customerId, currency, chain) {
+    return await this.request('/api/wallets', {
+      method: 'POST',
+      body: { customer_id: customerId, currency, chain }
+    });
+  }
+  
+  static async obtenerWallet(walletId) {
+    return await this.request(`/api/wallets/${walletId}`);
+  }
+  
+  static async consultarBalance(walletId) {
+    return await this.request(`/api/wallets/${walletId}/balance`);
+  }
+  
+  static async listarWallets(customerId) {
+    return await this.request(`/api/customers/${customerId}/wallets`);
+  }
+  
+  static async transaccionesWallet(walletId, limit = 10) {
+    return await this.request(`/api/wallets/${walletId}/transactions?limit=${limit}`);
+  }
+  
+  // ============================================
+  // EXTERNAL ACCOUNTS (CUENTAS BANCARIAS)
+  // ============================================
+  
+  static async crearCuentaBancaria(customerId, account, routing, currency = 'usd', country = 'US') {
+    return await this.request('/api/external-accounts', {
+      method: 'POST',
+      body: { customer_id: customerId, account, routing, currency, country }
+    });
+  }
+  
+  static async obtenerCuentaBancaria(accountId) {
+    return await this.request(`/api/external-accounts/${accountId}`);
+  }
+  
+  static async listarCuentasBancarias(customerId) {
+    return await this.request(`/api/customers/${customerId}/external-accounts`);
+  }
+  
+  static async eliminarCuentaBancaria(accountId) {
+    return await this.request(`/api/external-accounts/${accountId}`, {
+      method: 'DELETE'
+    });
+  }
+  
+  // ============================================
+  // TRANSFERS (TRANSFERENCIAS/CONVERSIONES)
+  // ============================================
+  
+  static async crearTransfer(datos) {
+    /*
+    Ejemplo de datos:
+    {
+      amount: "100.00",
+      customer_id: "cus_xxx",
+      source_type: "ach",
+      source_id: "ext_acc_xxx",
+      source_currency: "usd",
+      destination_type: "ethereum",
+      destination_id: "wal_xxx",
+      destination_currency: "usdc",
+      destination_chain: "ethereum",
+      developer_fee: "2.50" // opcional
+    }
+    */
+    return await this.request('/api/transfers', {
+      method: 'POST',
+      body: datos
+    });
+  }
+  
+  static async obtenerTransfer(transferId) {
+    return await this.request(`/api/transfers/${transferId}`);
+  }
+  
+  static async listarTransfers(customerId, limit = 10) {
+    return await this.request(`/api/customers/${customerId}/transfers?limit=${limit}`);
+  }
+  
+  static async cancelarTransfer(transferId) {
+    return await this.request(`/api/transfers/${transferId}/cancel`, {
+      method: 'POST'
+    });
+  }
+  
+  // ============================================
+  // VIRTUAL ACCOUNTS (CUENTAS VIRTUALES)
+  // ============================================
+  
+  static async crearCuentaVirtual(customerId, currency, destinationWalletId) {
+    return await this.request('/api/virtual-accounts', {
+      method: 'POST',
+      body: { 
+        customer_id: customerId, 
+        currency, 
+        destination_wallet_id: destinationWalletId 
+      }
+    });
+  }
+  
+  static async obtenerCuentaVirtual(accountId) {
+    return await this.request(`/api/virtual-accounts/${accountId}`);
+  }
+  
+  static async listarCuentasVirtuales(customerId) {
+    return await this.request(`/api/customers/${customerId}/virtual-accounts`);
+  }
+  
+  // ============================================
+  // LIQUIDATION ADDRESSES
+  // ============================================
+  
+  static async crearLiquidationAddress(customerId, chain, currency, destinationAccountId) {
+    return await this.request('/api/liquidation-addresses', {
+      method: 'POST',
+      body: { 
+        customer_id: customerId, 
+        chain, 
+        currency,
+        destination_external_account_id: destinationAccountId
+      }
+    });
+  }
+  
+  static async obtenerLiquidationAddress(addressId) {
+    return await this.request(`/api/liquidation-addresses/${addressId}`);
+  }
+  
+  // ============================================
+  // KYC (VERIFICACIÓN DE IDENTIDAD)
+  // ============================================
+  
+  static async crearKYCLink(customerId, type) {
+    return await this.request('/api/kyc-links', {
+      method: 'POST',
+      body: { customer_id: customerId, type }
+    });
+  }
+  
+  static async obtenerStatusKYC(customerId) {
+    return await this.request(`/api/customers/${customerId}/kyc-status`);
+  }
+  
+  // ============================================
+  // CARDS (TARJETAS)
+  // ============================================
+  
+  static async crearTarjeta(customerId, walletId, type = 'virtual') {
+    return await this.request('/api/cards', {
+      method: 'POST',
+      body: { customer_id: customerId, wallet_id: walletId, type }
+    });
+  }
+  
+  static async obtenerTarjeta(cardId) {
+    return await this.request(`/api/cards/${cardId}`);
+  }
+  
+  static async cambiarStatusTarjeta(cardId, status) {
+    return await this.request(`/api/cards/${cardId}/status`, {
+      method: 'PATCH',
+      body: { status }
+    });
+  }
+  
+  static async transaccionesTarjeta(cardId, limit = 10) {
+    return await this.request(`/api/cards/${cardId}/transactions?limit=${limit}`);
+  }
+  
+  // ============================================
+  // EXCHANGE RATES (TASAS DE CAMBIO)
+  // ============================================
+  
+  static async obtenerTasa(from, to, amount = null) {
+    let query = `from=${from}&to=${to}`;
+    if (amount) query += `&amount=${amount}`;
+    return await this.request(`/api/rates?${query}`);
+  }
+  
+  // ============================================
+  // UTILIDADES
+  // ============================================
+  
+  static async verificarHealth() {
+    return await this.request('/health');
+  }
+  
+  static async verificarStatus() {
+    return await this.request('/api/status');
+  }
+  
+  static async obtenerMonedasSoportadas() {
+    return await this.request('/api/supported');
+  }
+  
+  // ============================================
+  // HELPERS DE ALTO NIVEL (FLUJOS COMPLETOS)
+  // ============================================
+  
+  // Flujo completo: Crear cliente + wallet + hacer onramp
+  static async onboardCliente(email, nombre, moneda = 'usdc', chain = 'ethereum') {
+    try {
+      // 1. Crear cliente
+      const cliente = await this.crearCliente(email, 'individual', {
+        first_name: nombre
+      });
+      
+      if (!cliente.success) {
+        return { success: false, error: 'No se pudo crear cliente', details: cliente };
+      }
+      
+      // 2. Crear wallet
+      const wallet = await this.crearWallet(cliente.data.id, moneda, chain);
+      
+      if (!wallet.success) {
+        return { success: false, error: 'No se pudo crear wallet', details: wallet };
+      }
+      
+      return {
+        success: true,
+        cliente: cliente.data,
+        wallet: wallet.data
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // Flujo: Convertir fiat a crypto (on-ramp)
+  static async fiatACrypto(customerId, amount, externalAccountId, walletId, currency = 'usdc') {
+    return await this.crearTransfer({
+      amount: amount.toString(),
+      customer_id: customerId,
+      source_type: 'ach',
+      source_id: externalAccountId,
+      source_currency: 'usd',
+      destination_type: 'ethereum',
+      destination_id: walletId,
+      destination_currency: currency,
+      destination_chain: 'ethereum'
+    });
+  }
+  
+  // Flujo: Convertir crypto a fiat (off-ramp)
+  static async cryptoAFiat(customerId, amount, walletId, externalAccountId) {
+    return await this.crearTransfer({
+      amount: amount.toString(),
+      customer_id: customerId,
+      source_type: 'ethereum',
+      source_id: walletId,
+      source_currency: 'usdc',
+      destination_type: 'ach',
+      destination_id: externalAccountId,
+      destination_currency: 'usd'
+    });
+  }
+}
+
+// Para usar en HTML
+if (typeof window !== 'undefined') {
+  window.BridgeClient = BridgeClient;
+}
+
+// Para usar en Node.js
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = BridgeClient;
+}

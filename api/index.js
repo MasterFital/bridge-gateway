@@ -291,7 +291,9 @@ app.get('/health', (req, res) => {
 app.get('/api/status', async (req, res) => {
   try {
     const startTime = Date.now();
-    const bridgeResponse = await bridgeRequest('GET', '/developers/prefunded_accounts');
+    // Usar /customers con limit=1 para verificar conectividad
+    // Es un endpoint siempre disponible y responde rápido
+    const bridgeResponse = await bridgeRequest('GET', '/customers?limit=1');
     const responseTime = Date.now() - startTime;
 
     res.json({

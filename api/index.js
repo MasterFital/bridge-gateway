@@ -34,7 +34,6 @@ const cors = require('cors');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { Pool } = require('@neondatabase/serverless');
 
 const app = express();
 
@@ -42,7 +41,35 @@ const app = express();
 // CONFIGURACIÓN DE BASE DE DATOS Y JWT
 // ============================================================================
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// Adaptador inteligente: usa Neon para URLs de neon.tech, pg estándar para otras
+const DATABASE_URL = process.env.DATABASE_URL;
+let pool = null;
+let dbType = 'none';
+
+if (DATABASE_URL) {
+  const isNeonDb = DATABASE_URL.includes('neon.tech') || DATABASE_URL.includes('neon.aws');
+  
+  if (isNeonDb) {
+    // Usar driver Neon serverless para bases de datos Neon (requiere WebSocket)
+    const { Pool: NeonPool } = require('@neondatabase/serverless');
+    pool = new NeonPool({ connectionString: DATABASE_URL });
+    dbType = 'neon';
+  } else {
+    // Usar driver pg estándar para PostgreSQL normal (Replit, local, etc.)
+    const { Pool: PgPool } = require('pg');
+    pool = new PgPool({ connectionString: DATABASE_URL });
+    dbType = 'pg';
+  }
+  
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    message: 'Database adapter initialized',
+    type: dbType,
+    host: DATABASE_URL.split('@')[1]?.split('/')[0] || 'unknown'
+  }));
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const JWT_EXPIRES_IN = '7d'; // Tokens válidos por 7 días
 

@@ -46,39 +46,13 @@ const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX) || 100;
 const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW) || 60000;
 
 // ============================================================================
-// MEJORA #2: ENVIRONMENT DETECTION - Detectar Sandbox vs Producción
+// CONFIGURACIÓN DE AMBIENTE - Siempre Producción
 // ============================================================================
 
-function detectEnvironment(apiKey) {
-  if (!apiKey) {
-    return { environment: 'unknown', url: 'https://api.bridge.xyz/v0' };
-  }
-  
-  // Bridge.xyz usa diferentes prefijos para sandbox y producción
-  // Sandbox keys típicamente contienen 'test', 'sandbox', o 'sk_test'
-  // Production keys típicamente contienen 'live', 'prod', o 'sk_live'
-  const keyLower = apiKey.toLowerCase();
-  
-  if (keyLower.includes('test') || keyLower.includes('sandbox') || keyLower.startsWith('sk_test')) {
-    return {
-      environment: 'sandbox',
-      url: 'https://api.sandbox.bridge.xyz/v0'
-    };
-  }
-  
-  // Por defecto, usar producción
-  return {
-    environment: 'production',
-    url: 'https://api.bridge.xyz/v0'
-  };
-}
+const BRIDGE_URL = 'https://api.bridge.xyz/v0';
+const BRIDGE_ENVIRONMENT = 'production';
 
-// Detectar ambiente automáticamente o usar URL manual si está configurada
-const detectedEnv = detectEnvironment(BRIDGE_API_KEY);
-const BRIDGE_URL = process.env.BRIDGE_URL || detectedEnv.url;
-const BRIDGE_ENVIRONMENT = process.env.BRIDGE_URL ? 'manual' : detectedEnv.environment;
-
-// Log del ambiente detectado al iniciar
+// Log del ambiente al iniciar
 console.log(JSON.stringify({
   timestamp: new Date().toISOString(),
   level: 'info',

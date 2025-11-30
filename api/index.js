@@ -48,6 +48,7 @@ let dbType = 'none';
 
 if (DATABASE_URL) {
   const isNeonDb = DATABASE_URL.includes('neon.tech') || DATABASE_URL.includes('neon.aws');
+  const isRDS = DATABASE_URL.includes('.rds.amazonaws.com');
   
   if (isNeonDb) {
     // Usar driver Neon serverless para bases de datos Neon (requiere WebSocket)
@@ -55,10 +56,15 @@ if (DATABASE_URL) {
     pool = new NeonPool({ connectionString: DATABASE_URL });
     dbType = 'neon';
   } else {
-    // Usar driver pg estándar para PostgreSQL normal (Replit, local, etc.)
+    // Usar driver pg estándar para PostgreSQL normal (RDS, Replit, local, etc.)
     const { Pool: PgPool } = require('pg');
-    pool = new PgPool({ connectionString: DATABASE_URL });
-    dbType = 'pg';
+    const poolConfig = { 
+      connectionString: DATABASE_URL,
+      // SSL requerido para RDS y otras bases de datos cloud
+      ssl: isRDS ? { rejectUnauthorized: false } : false
+    };
+    pool = new PgPool(poolConfig);
+    dbType = isRDS ? 'rds' : 'pg';
   }
   
   console.log(JSON.stringify({

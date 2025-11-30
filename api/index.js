@@ -480,6 +480,190 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
+// GET /api/docs - Documentación completa para IAs y desarrolladores
+app.get('/api/docs', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      name: "Bridge.xyz API Gateway",
+      version: "1.1.0",
+      description: "API Gateway que actúa como intermediario seguro entre tus aplicaciones y la API oficial de Bridge.xyz. Bridge.xyz es una infraestructura de stablecoins para pagos, wallets, transferencias y emisión de tarjetas.",
+      baseUrl: "https://bridge-gateway-eta.vercel.app",
+      bridgeApiUrl: "https://api.bridge.xyz/v0",
+      authentication: {
+        type: "API Token",
+        header: "x-api-token",
+        description: "Todas las peticiones (excepto /health) requieren el header x-api-token con tu token secreto."
+      },
+      features: {
+        rateLimitByToken: "100 peticiones por minuto por token",
+        retryLogic: "3 reintentos automáticos con exponential backoff (100ms, 200ms, 400ms)",
+        idempotencyKeys: "Generadas automáticamente para POST/PUT/PATCH para prevenir duplicados",
+        logging: "Logging estructurado en JSON con request ID único"
+      },
+      endpoints: {
+        monitoring: [
+          { method: "GET", path: "/health", description: "Health check del gateway (no requiere auth)", auth: false },
+          { method: "GET", path: "/api/status", description: "Status completo con conexión a Bridge", auth: true },
+          { method: "GET", path: "/api/docs", description: "Esta documentación", auth: true }
+        ],
+        customers: [
+          { method: "POST", path: "/api/customers", description: "Crear nuevo cliente (individual o business)" },
+          { method: "GET", path: "/api/customers", description: "Listar todos los clientes con paginación" },
+          { method: "GET", path: "/api/customers/:id", description: "Obtener cliente por ID" },
+          { method: "PUT", path: "/api/customers/:id", description: "Actualizar cliente" },
+          { method: "PATCH", path: "/api/customers/:id", description: "Actualizar cliente (parcial)" },
+          { method: "DELETE", path: "/api/customers/:id", description: "Eliminar cliente" },
+          { method: "GET", path: "/api/customers/:id/kyc-link", description: "Obtener enlace KYC para verificación de identidad" },
+          { method: "GET", path: "/api/customers/:id/tos-link", description: "Obtener enlace de Términos de Servicio" },
+          { method: "POST", path: "/api/customers/tos-links", description: "Crear enlace TOS para nuevos clientes" }
+        ],
+        kycLinks: [
+          { method: "POST", path: "/api/kyc-links", description: "Crear enlace KYC" },
+          { method: "GET", path: "/api/kyc-links", description: "Listar todos los enlaces KYC" },
+          { method: "GET", path: "/api/kyc-links/:id", description: "Obtener enlace KYC por ID" }
+        ],
+        externalAccounts: [
+          { method: "POST", path: "/api/customers/:id/external-accounts", description: "Vincular cuenta bancaria o wallet crypto" },
+          { method: "GET", path: "/api/customers/:id/external-accounts", description: "Listar cuentas externas del cliente" },
+          { method: "GET", path: "/api/customers/:id/external-accounts/:accountId", description: "Obtener cuenta externa específica" },
+          { method: "PUT", path: "/api/customers/:id/external-accounts/:accountId", description: "Actualizar cuenta externa" },
+          { method: "DELETE", path: "/api/customers/:id/external-accounts/:accountId", description: "Eliminar cuenta externa" },
+          { method: "POST", path: "/api/customers/:id/external-accounts/:accountId/reactivate", description: "Reactivar cuenta desactivada" }
+        ],
+        wallets: [
+          { method: "POST", path: "/api/customers/:id/wallets", description: "Crear wallet custodial de stablecoins" },
+          { method: "GET", path: "/api/customers/:id/wallets", description: "Listar wallets del cliente" },
+          { method: "GET", path: "/api/customers/:id/wallets/:walletId", description: "Obtener wallet con balance" }
+        ],
+        transfers: [
+          { method: "POST", path: "/api/transfers", description: "Crear transferencia (on-ramp fiat→crypto o off-ramp crypto→fiat)" },
+          { method: "GET", path: "/api/transfers", description: "Listar todas las transferencias" },
+          { method: "GET", path: "/api/transfers/:id", description: "Obtener transferencia por ID" },
+          { method: "PUT", path: "/api/transfers/:id", description: "Actualizar transferencia" },
+          { method: "DELETE", path: "/api/transfers/:id", description: "Cancelar transferencia (solo en estado awaiting_funds)" }
+        ],
+        virtualAccounts: [
+          { method: "POST", path: "/api/customers/:id/virtual-accounts", description: "Crear cuenta virtual (USD/EUR/MXN) con auto-conversión a stablecoins" },
+          { method: "GET", path: "/api/customers/:id/virtual-accounts", description: "Listar cuentas virtuales" },
+          { method: "GET", path: "/api/customers/:id/virtual-accounts/:accountId", description: "Obtener cuenta virtual con routing/IBAN" },
+          { method: "PUT", path: "/api/customers/:id/virtual-accounts/:accountId", description: "Actualizar cuenta virtual" },
+          { method: "DELETE", path: "/api/customers/:id/virtual-accounts/:accountId", description: "Eliminar cuenta virtual" },
+          { method: "GET", path: "/api/customers/:id/virtual-accounts/:accountId/history", description: "Historial de depósitos" },
+          { method: "POST", path: "/api/customers/:id/virtual-accounts/:accountId/simulate-deposit", description: "Simular depósito (solo sandbox)" }
+        ],
+        staticMemos: [
+          { method: "POST", path: "/api/customers/:id/static-memos", description: "Crear memo estático para identificar depósitos" },
+          { method: "GET", path: "/api/customers/:id/static-memos", description: "Listar memos estáticos" },
+          { method: "GET", path: "/api/customers/:id/static-memos/:memoId", description: "Obtener memo específico" },
+          { method: "DELETE", path: "/api/customers/:id/static-memos/:memoId", description: "Eliminar memo" },
+          { method: "GET", path: "/api/customers/:id/static-memos/:memoId/history", description: "Historial de transacciones del memo" }
+        ],
+        liquidationAddresses: [
+          { method: "POST", path: "/api/customers/:id/liquidation-addresses", description: "Crear dirección blockchain con auto-conversión a fiat" },
+          { method: "GET", path: "/api/customers/:id/liquidation-addresses", description: "Listar direcciones de liquidación" },
+          { method: "GET", path: "/api/customers/:id/liquidation-addresses/:addressId", description: "Obtener dirección específica" },
+          { method: "GET", path: "/api/customers/:id/liquidation-addresses/:addressId/history", description: "Historial de liquidaciones" }
+        ],
+        prefundedAccounts: [
+          { method: "GET", path: "/api/prefunded-accounts", description: "Listar cuentas prefundadas del desarrollador" },
+          { method: "GET", path: "/api/prefunded-accounts/:id", description: "Obtener cuenta prefundada específica" }
+        ],
+        cards: [
+          { method: "POST", path: "/api/customers/:id/cards", description: "Emitir tarjeta virtual o física" },
+          { method: "GET", path: "/api/customers/:id/cards", description: "Listar tarjetas del cliente" },
+          { method: "GET", path: "/api/customers/:id/cards/:cardId", description: "Obtener tarjeta específica" },
+          { method: "PUT", path: "/api/customers/:id/cards/:cardId", description: "Actualizar tarjeta (activar/congelar/cancelar)" }
+        ],
+        plaid: [
+          { method: "POST", path: "/api/plaid/link-token", description: "Crear token de vinculación Plaid" },
+          { method: "POST", path: "/api/plaid/exchange-token", description: "Intercambiar token público por cuenta externa" }
+        ],
+        exchangeRates: [
+          { method: "GET", path: "/api/exchange-rates", description: "Obtener tasas de cambio actuales" }
+        ],
+        referenceData: [
+          { method: "GET", path: "/api/supported-currencies", description: "Listar monedas soportadas" },
+          { method: "GET", path: "/api/supported-chains", description: "Listar blockchains soportadas" },
+          { method: "GET", path: "/api/supported-countries", description: "Listar países soportados" }
+        ],
+        webhooks: [
+          { method: "POST", path: "/api/webhooks", description: "Crear webhook para recibir notificaciones" },
+          { method: "GET", path: "/api/webhooks", description: "Listar webhooks configurados" },
+          { method: "GET", path: "/api/webhooks/:id", description: "Obtener webhook específico" },
+          { method: "PUT", path: "/api/webhooks/:id", description: "Actualizar webhook (habilitar/deshabilitar)" },
+          { method: "DELETE", path: "/api/webhooks/:id", description: "Eliminar webhook" },
+          { method: "POST", path: "/api/webhooks/:id/test", description: "Enviar evento de prueba" },
+          { method: "GET", path: "/api/webhooks/:id/logs", description: "Ver logs de entregas" },
+          { method: "POST", path: "/api/webhooks/:id/logs/:logId/retry", description: "Reintentar entrega fallida" }
+        ],
+        webhookReceiver: [
+          { method: "POST", path: "/webhooks/bridge", description: "Endpoint para recibir webhooks de Bridge (verifica firma HMAC)" }
+        ]
+      },
+      models: {
+        customer: {
+          description: "Representa un usuario final (individual o empresa)",
+          types: ["individual", "business"],
+          requiredFields: {
+            individual: ["type", "first_name", "last_name", "email"],
+            business: ["type", "business_name", "email"]
+          }
+        },
+        wallet: {
+          description: "Wallet custodial de stablecoins manejado por Bridge",
+          chains: ["ethereum", "solana", "polygon", "base", "arbitrum", "optimism"],
+          currencies: ["usdc", "usdt", "usdb"]
+        },
+        transfer: {
+          description: "Movimiento de fondos entre fiat y crypto",
+          states: [
+            { state: "awaiting_funds", description: "Esperando que el cliente envíe fondos" },
+            { state: "in_review", description: "En revisión (temporal)" },
+            { state: "funds_received", description: "Bridge recibió fondos, procesando" },
+            { state: "pending", description: "Transferencia en progreso" },
+            { state: "completed", description: "Transferencia exitosa" },
+            { state: "failed", description: "Transferencia fallida" },
+            { state: "canceled", description: "Transferencia cancelada" }
+          ],
+          types: [
+            { type: "on-ramp", description: "Fiat → Crypto (banco a wallet)" },
+            { type: "off-ramp", description: "Crypto → Fiat (wallet a banco)" }
+          ]
+        },
+        virtualAccount: {
+          description: "Cuenta bancaria virtual con número único que auto-convierte depósitos a stablecoins",
+          currencies: ["usd", "eur", "mxn"],
+          features: ["Número de cuenta único", "Auto-conversión a USDC/USDT", "ACH/Wire (USD)", "SEPA/IBAN (EUR)"]
+        },
+        liquidationAddress: {
+          description: "Dirección blockchain permanente que auto-convierte depósitos crypto a fiat",
+          useCase: "Recibir USDC en Solana → Automáticamente convertir a USD → Depositar en banco"
+        },
+        card: {
+          description: "Tarjeta de débito vinculada a wallet de stablecoins",
+          types: ["virtual", "physical"],
+          statuses: ["active", "frozen", "canceled"]
+        }
+      },
+      errorCodes: [
+        { code: 400, name: "Bad Request", description: "Datos inválidos en la petición" },
+        { code: 401, name: "Unauthorized", description: "Token de autenticación inválido o faltante" },
+        { code: 403, name: "Forbidden", description: "Sin permisos para esta operación" },
+        { code: 404, name: "Not Found", description: "Recurso no encontrado" },
+        { code: 429, name: "Rate Limit", description: "Demasiadas peticiones, espera antes de reintentar" },
+        { code: 500, name: "Internal Error", description: "Error interno del servidor" },
+        { code: 503, name: "Service Unavailable", description: "Bridge API no disponible" }
+      ],
+      externalDocs: {
+        bridgeOfficial: "https://apidocs.bridge.xyz",
+        gettingStarted: "https://apidocs.bridge.xyz/docs/getting-started",
+        apiReference: "https://apidocs.bridge.xyz/reference"
+      }
+    }
+  });
+});
+
 // ============================================================================
 // CUSTOMERS API (8 endpoints)
 // ============================================================================

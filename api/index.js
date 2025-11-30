@@ -32,8 +32,19 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { Pool } = require('@neondatabase/serverless');
 
 const app = express();
+
+// ============================================================================
+// CONFIGURACIÓN DE BASE DE DATOS Y JWT
+// ============================================================================
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const JWT_EXPIRES_IN = '7d'; // Tokens válidos por 7 días
 
 // ============================================================================
 // CONFIGURACIÓN
@@ -201,42 +212,327 @@ function rateLimitMiddleware(req, res, next) {
 app.use(rateLimitMiddleware);
 
 // ============================================================================
-// MIDDLEWARE DE AUTENTICACIÓN
+// SISTEMA DE USUARIOS - Base de datos
 // ============================================================================
 
-function authMiddleware(req, res, next) {
-  // Endpoints públicos que no requieren autenticación
-  const publicPaths = ['/health', '/webhooks/bridge'];
-  if (publicPaths.includes(req.path)) {
-    return next();
+async function initializeUsersTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS gateway_users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        name VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP,
+        is_active BOOLEAN DEFAULT true
+      )
+    `);
+    log('info', 'Users table initialized');
+  } catch (error) {
+    log('error', 'Failed to initialize users table', { error: error.message });
   }
+}
 
-  // Verificar token del gateway si está configurado
-  if (MI_TOKEN_SECRETO) {
-    const token = req.headers['x-api-token'];
-    if (!token || token !== MI_TOKEN_SECRETO) {
+// Inicializar tabla al arrancar
+initializeUsersTable();
+
+// ============================================================================
+// AUTH API - Registro y Login
+// ============================================================================
+
+// POST /auth/register - Crear cuenta nueva
+app.post('/auth/register', async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    // Validaciones
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Email y password son requeridos'
+        }
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'La contraseña debe tener al menos 8 caracteres'
+        }
+      });
+    }
+
+    // Verificar si el email ya existe
+    const existingUser = await pool.query(
+      'SELECT id FROM gateway_users WHERE email = $1',
+      [email.toLowerCase()]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: 'EMAIL_EXISTS',
+          message: 'Ya existe una cuenta con este email'
+        }
+      });
+    }
+
+    // Hash de la contraseña
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    // Crear usuario
+    const result = await pool.query(
+      'INSERT INTO gateway_users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, created_at',
+      [email.toLowerCase(), passwordHash, name || null]
+    );
+
+    const user = result.rows[0];
+
+    // Generar JWT
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    log('info', 'User registered', { userId: user.id, email: user.email });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          createdAt: user.created_at
+        },
+        token,
+        expiresIn: JWT_EXPIRES_IN
+      }
+    });
+
+  } catch (error) {
+    log('error', 'Registration failed', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'REGISTRATION_FAILED',
+        message: 'Error al crear la cuenta'
+      }
+    });
+  }
+});
+
+// POST /auth/login - Iniciar sesión
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Email y password son requeridos'
+        }
+      });
+    }
+
+    // Buscar usuario
+    const result = await pool.query(
+      'SELECT id, email, name, password_hash, is_active FROM gateway_users WHERE email = $1',
+      [email.toLowerCase()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_CREDENTIALS',
+          message: 'Email o contraseña incorrectos'
+        }
+      });
+    }
+
+    const user = result.rows[0];
+
+    // Verificar si la cuenta está activa
+    if (!user.is_active) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'ACCOUNT_DISABLED',
+          message: 'Esta cuenta ha sido desactivada'
+        }
+      });
+    }
+
+    // Verificar contraseña
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+    if (!validPassword) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_CREDENTIALS',
+          message: 'Email o contraseña incorrectos'
+        }
+      });
+    }
+
+    // Actualizar último login
+    await pool.query(
+      'UPDATE gateway_users SET last_login = CURRENT_TIMESTAMP WHERE id = $1',
+      [user.id]
+    );
+
+    // Generar JWT
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    log('info', 'User logged in', { userId: user.id, email: user.email });
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name
+        },
+        token,
+        expiresIn: JWT_EXPIRES_IN
+      }
+    });
+
+  } catch (error) {
+    log('error', 'Login failed', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'LOGIN_FAILED',
+        message: 'Error al iniciar sesión'
+      }
+    });
+  }
+});
+
+// GET /auth/me - Obtener usuario actual
+app.get('/auth/me', async (req, res) => {
+  try {
+    // Verificar token JWT
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
         error: {
           code: 'UNAUTHORIZED',
-          message: 'Token de autenticación inválido o faltante. Incluye el header x-api-token.'
+          message: 'Token no proporcionado. Usa: Authorization: Bearer <token>'
+        }
+      });
+    }
+
+    const token = authHeader.substring(7);
+    
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      
+      const result = await pool.query(
+        'SELECT id, email, name, created_at, last_login FROM gateway_users WHERE id = $1',
+        [decoded.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'USER_NOT_FOUND',
+            message: 'Usuario no encontrado'
+          }
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result.rows[0]
+      });
+
+    } catch (jwtError) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Token inválido o expirado'
+        }
+      });
+    }
+
+  } catch (error) {
+    log('error', 'Get user failed', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: 'Error al obtener usuario'
+      }
+    });
+  }
+});
+
+// ============================================================================
+// MIDDLEWARE DE AUTENTICACIÓN (acepta token fijo O JWT)
+// ============================================================================
+
+function authMiddleware(req, res, next) {
+  // Endpoints públicos que no requieren autenticación
+  const publicPaths = ['/health', '/webhooks/bridge', '/auth/register', '/auth/login'];
+  if (publicPaths.includes(req.path)) {
+    return next();
+  }
+
+  // OPCIÓN 1: Token fijo (x-api-token header) - compatibilidad hacia atrás
+  const fixedToken = req.headers['x-api-token'];
+  if (fixedToken && MI_TOKEN_SECRETO && fixedToken === MI_TOKEN_SECRETO) {
+    req.authType = 'fixed_token';
+    return next();
+  }
+
+  // OPCIÓN 2: JWT (Authorization: Bearer <token>)
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const jwtToken = authHeader.substring(7);
+    try {
+      const decoded = jwt.verify(jwtToken, JWT_SECRET);
+      req.user = decoded;
+      req.authType = 'jwt';
+      return next();
+    } catch (jwtError) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Token JWT inválido o expirado. Inicia sesión nuevamente.'
         }
       });
     }
   }
 
-  // Verificar que BRIDGE_API_KEY esté configurado
-  if (!BRIDGE_API_KEY) {
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: 'CONFIGURATION_ERROR',
-        message: 'BRIDGE_API_KEY no está configurado en el servidor.'
-      }
-    });
-  }
-
-  next();
+  // Si no hay token válido
+  return res.status(401).json({
+    success: false,
+    error: {
+      code: 'UNAUTHORIZED',
+      message: 'Autenticación requerida. Usa x-api-token O Authorization: Bearer <jwt>'
+    }
+  });
 }
 
 app.use(authMiddleware);
@@ -491,9 +787,18 @@ app.get('/api/docs', (req, res) => {
       baseUrl: "https://bridge-gateway-eta.vercel.app",
       bridgeApiUrl: "https://api.bridge.xyz/v0",
       authentication: {
-        type: "API Token",
-        header: "x-api-token",
-        description: "Todas las peticiones (excepto /health) requieren el header x-api-token con tu token secreto."
+        methods: [
+          {
+            type: "JWT (recomendado)",
+            header: "Authorization: Bearer <token>",
+            description: "Regístrate con /auth/register, luego haz login con /auth/login para obtener un JWT válido por 7 días."
+          },
+          {
+            type: "Token fijo (legacy)",
+            header: "x-api-token",
+            description: "Token estático configurado en el servidor. Útil para integraciones simples."
+          }
+        ]
       },
       features: {
         rateLimitByToken: "100 peticiones por minuto por token",
@@ -502,6 +807,11 @@ app.get('/api/docs', (req, res) => {
         logging: "Logging estructurado en JSON con request ID único"
       },
       endpoints: {
+        auth: [
+          { method: "POST", path: "/auth/register", description: "Crear cuenta nueva (email, password, name opcional)", auth: false, returns: "JWT token válido por 7 días" },
+          { method: "POST", path: "/auth/login", description: "Iniciar sesión con email y password", auth: false, returns: "JWT token válido por 7 días" },
+          { method: "GET", path: "/auth/me", description: "Obtener datos del usuario autenticado", auth: true }
+        ],
         monitoring: [
           { method: "GET", path: "/health", description: "Health check del gateway (no requiere auth)", auth: false },
           { method: "GET", path: "/api/status", description: "Status completo con conexión a Bridge", auth: true },

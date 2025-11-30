@@ -39,12 +39,65 @@ const app = express();
 // CONFIGURACIÓN
 // ============================================================================
 
-const BRIDGE_URL = process.env.BRIDGE_URL || 'https://api.bridge.xyz/v0';
 const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
 const MI_TOKEN_SECRETO = process.env.MI_TOKEN_SECRETO;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX) || 100;
 const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW) || 60000;
+
+// ============================================================================
+// MEJORA #2: ENVIRONMENT DETECTION - Detectar Sandbox vs Producción
+// ============================================================================
+
+function detectEnvironment(apiKey) {
+  if (!apiKey) {
+    return { environment: 'unknown', url: 'https://api.bridge.xyz/v0' };
+  }
+  
+  // Bridge.xyz usa diferentes prefijos para sandbox y producción
+  // Sandbox keys típicamente contienen 'test', 'sandbox', o 'sk_test'
+  // Production keys típicamente contienen 'live', 'prod', o 'sk_live'
+  const keyLower = apiKey.toLowerCase();
+  
+  if (keyLower.includes('test') || keyLower.includes('sandbox') || keyLower.startsWith('sk_test')) {
+    return {
+      environment: 'sandbox',
+      url: 'https://api.sandbox.bridge.xyz/v0'
+    };
+  }
+  
+  // Por defecto, usar producción
+  return {
+    environment: 'production',
+    url: 'https://api.bridge.xyz/v0'
+  };
+}
+
+// Detectar ambiente automáticamente o usar URL manual si está configurada
+const detectedEnv = detectEnvironment(BRIDGE_API_KEY);
+const BRIDGE_URL = process.env.BRIDGE_URL || detectedEnv.url;
+const BRIDGE_ENVIRONMENT = process.env.BRIDGE_URL ? 'manual' : detectedEnv.environment;
+
+// Log del ambiente detectado al iniciar
+console.log(JSON.stringify({
+  timestamp: new Date().toISOString(),
+  level: 'info',
+  message: 'Gateway initialized',
+  environment: BRIDGE_ENVIRONMENT,
+  bridgeUrl: BRIDGE_URL
+}));
+
+// ============================================================================
+// MEJORA #3: RETRY LOGIC - Configuración de reintentos
+// ============================================================================
+
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelay: 100,      // 100ms inicial
+  maxDelay: 2000,      // máximo 2 segundos
+  retryableStatuses: [500, 502, 503, 504],  // Solo errores de servidor
+  retryableErrors: ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'FETCH_ERROR']
+};
 
 // ============================================================================
 // MIDDLEWARES BASE
@@ -97,7 +150,7 @@ app.use((req, res, next) => {
 });
 
 // ============================================================================
-// RATE LIMITING
+// MEJORA #1: RATE LIMITING POR TOKEN (en lugar de solo IP)
 // ============================================================================
 
 const rateLimitStore = new Map();
@@ -113,15 +166,29 @@ function cleanupRateLimitStore() {
 
 setInterval(cleanupRateLimitStore, RATE_LIMIT_WINDOW);
 
-function rateLimitMiddleware(req, res, next) {
+function getRateLimitKey(req) {
+  // MEJORA: Usar token como identificador principal
+  // Esto permite rate limiting por cliente en lugar de por IP
+  const token = req.headers['x-api-token'];
+  if (token) {
+    // Usar hash del token para no exponer el token en logs/memoria
+    return `token:${crypto.createHash('sha256').update(token).digest('hex').substring(0, 16)}`;
+  }
+  
+  // Fallback a IP si no hay token (para endpoints públicos)
   const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  return `ip:${ip}`;
+}
+
+function rateLimitMiddleware(req, res, next) {
+  const rateLimitKey = getRateLimitKey(req);
   const now = Date.now();
 
-  let data = rateLimitStore.get(ip);
+  let data = rateLimitStore.get(rateLimitKey);
   
   if (!data || now - data.windowStart > RATE_LIMIT_WINDOW) {
     data = { count: 1, windowStart: now };
-    rateLimitStore.set(ip, data);
+    rateLimitStore.set(rateLimitKey, data);
   } else {
     data.count++;
   }
@@ -132,16 +199,24 @@ function rateLimitMiddleware(req, res, next) {
   res.set({
     'X-RateLimit-Limit': RATE_LIMIT_MAX,
     'X-RateLimit-Remaining': remaining,
-    'X-RateLimit-Reset': resetTime
+    'X-RateLimit-Reset': resetTime,
+    'X-RateLimit-Type': rateLimitKey.startsWith('token:') ? 'token' : 'ip'
   });
 
   if (data.count > RATE_LIMIT_MAX) {
+    log('warn', 'Rate limit exceeded', {
+      key: rateLimitKey,
+      count: data.count,
+      limit: RATE_LIMIT_MAX
+    });
+    
     res.set('Retry-After', resetTime);
     return res.status(429).json({
       success: false,
       error: {
         code: 'RATE_LIMIT_EXCEEDED',
-        message: `Límite de ${RATE_LIMIT_MAX} peticiones por minuto excedido. Intenta de nuevo en ${resetTime} segundos.`
+        message: `Límite de ${RATE_LIMIT_MAX} peticiones por minuto excedido. Intenta de nuevo en ${resetTime} segundos.`,
+        resetIn: resetTime
       }
     });
   }
@@ -193,11 +268,39 @@ function authMiddleware(req, res, next) {
 app.use(authMiddleware);
 
 // ============================================================================
-// HELPER: COMUNICACIÓN CON BRIDGE API
+// HELPER: COMUNICACIÓN CON BRIDGE API + MEJORA #3: RETRY LOGIC
 // ============================================================================
+
+// Función de delay con exponential backoff
+function calculateDelay(attempt) {
+  const delay = Math.min(
+    RETRY_CONFIG.baseDelay * Math.pow(2, attempt),
+    RETRY_CONFIG.maxDelay
+  );
+  // Agregar jitter aleatorio (±25%) para evitar thundering herd
+  const jitter = delay * 0.25 * (Math.random() - 0.5);
+  return Math.floor(delay + jitter);
+}
+
+// Verificar si el error es reintentable
+function isRetryableError(error, status) {
+  // Errores de red son reintentables
+  if (error && RETRY_CONFIG.retryableErrors.some(e => error.message?.includes(e))) {
+    return true;
+  }
+  // Errores 5xx de servidor son reintentables
+  if (status && RETRY_CONFIG.retryableStatuses.includes(status)) {
+    return true;
+  }
+  return false;
+}
+
+// Función de sleep
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function bridgeRequest(method, path, body = null, options = {}) {
   const url = `${BRIDGE_URL}${path}`;
+  const idempotencyKey = options.idempotencyKey || crypto.randomUUID();
   
   const headers = {
     'Api-Key': BRIDGE_API_KEY,
@@ -206,8 +309,9 @@ async function bridgeRequest(method, path, body = null, options = {}) {
   };
 
   // Agregar Idempotency-Key para POST y PUT (según especificaciones Bridge)
+  // IMPORTANTE: Usar la misma key en todos los reintentos para evitar duplicados
   if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase())) {
-    headers['Idempotency-Key'] = options.idempotencyKey || crypto.randomUUID();
+    headers['Idempotency-Key'] = idempotencyKey;
   }
 
   const fetchOptions = {
@@ -219,40 +323,98 @@ async function bridgeRequest(method, path, body = null, options = {}) {
     fetchOptions.body = JSON.stringify(body);
   }
 
-  log('debug', 'Bridge API Request', {
-    method: fetchOptions.method,
-    url,
-    hasBody: !!body
-  });
+  let lastError = null;
+  let lastResponse = null;
 
-  try {
-    const response = await fetch(url, fetchOptions);
-    const responseText = await response.text();
-    
-    let data;
+  // MEJORA #3: Retry Logic con exponential backoff
+  for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
     try {
-      data = JSON.parse(responseText);
-    } catch {
-      data = { raw: responseText };
+      if (attempt > 0) {
+        const delay = calculateDelay(attempt - 1);
+        log('info', 'Retrying Bridge API request', {
+          attempt,
+          maxRetries: RETRY_CONFIG.maxRetries,
+          delay: `${delay}ms`,
+          url
+        });
+        await sleep(delay);
+      }
+
+      log('debug', 'Bridge API Request', {
+        method: fetchOptions.method,
+        url,
+        hasBody: !!body,
+        attempt: attempt + 1
+      });
+
+      const response = await fetch(url, fetchOptions);
+      const responseText = await response.text();
+      
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        data = { raw: responseText };
+      }
+
+      // Si es error 5xx y tenemos reintentos disponibles, continuar
+      if (isRetryableError(null, response.status) && attempt < RETRY_CONFIG.maxRetries) {
+        log('warn', 'Retryable server error', {
+          status: response.status,
+          attempt: attempt + 1,
+          url
+        });
+        lastResponse = { status: response.status, ok: response.ok, data };
+        continue;
+      }
+
+      log('debug', 'Bridge API Response', {
+        status: response.status,
+        url,
+        attempts: attempt + 1
+      });
+
+      return {
+        status: response.status,
+        ok: response.ok,
+        data,
+        attempts: attempt + 1
+      };
+      
+    } catch (error) {
+      lastError = error;
+      
+      // Si es error de red y tenemos reintentos disponibles, continuar
+      if (isRetryableError(error, null) && attempt < RETRY_CONFIG.maxRetries) {
+        log('warn', 'Retryable network error', {
+          error: error.message,
+          attempt: attempt + 1,
+          url
+        });
+        continue;
+      }
+
+      // Error no reintentable o sin reintentos restantes
+      log('error', 'Bridge API Error', {
+        url,
+        error: error.message,
+        attempts: attempt + 1
+      });
+      throw error;
     }
-
-    log('debug', 'Bridge API Response', {
-      status: response.status,
-      url
-    });
-
-    return {
-      status: response.status,
-      ok: response.ok,
-      data
-    };
-  } catch (error) {
-    log('error', 'Bridge API Error', {
-      url,
-      error: error.message
-    });
-    throw error;
   }
+
+  // Si llegamos aquí, agotamos los reintentos
+  if (lastResponse) {
+    log('error', 'Bridge API failed after retries', {
+      url,
+      status: lastResponse.status,
+      attempts: RETRY_CONFIG.maxRetries + 1
+    });
+    return lastResponse;
+  }
+
+  throw lastError || new Error('Bridge API request failed after retries');
 }
 
 // Helper para enviar respuestas estandarizadas
@@ -281,8 +443,9 @@ app.get('/health', (req, res) => {
     data: {
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      version: '1.0.0',
-      service: 'bridge-api-gateway'
+      version: '1.1.0',
+      service: 'bridge-api-gateway',
+      environment: BRIDGE_ENVIRONMENT
     }
   });
 });
@@ -301,19 +464,33 @@ app.get('/api/status', async (req, res) => {
       data: {
         gateway: {
           status: 'healthy',
-          version: '1.0.0',
+          version: '1.1.0',
           timestamp: new Date().toISOString()
         },
         bridge: {
           status: bridgeResponse.ok ? 'connected' : 'error',
           responseTime: `${responseTime}ms`,
-          apiVersion: 'v0'
+          apiVersion: 'v0',
+          attempts: bridgeResponse.attempts || 1
         },
         configuration: {
           bridgeUrl: BRIDGE_URL,
+          environment: BRIDGE_ENVIRONMENT,
           rateLimitMax: RATE_LIMIT_MAX,
           rateLimitWindow: `${RATE_LIMIT_WINDOW}ms`,
+          rateLimitType: 'per-token',
           authEnabled: !!MI_TOKEN_SECRETO
+        },
+        features: {
+          rateLimitByToken: true,
+          environmentDetection: true,
+          retryLogic: {
+            enabled: true,
+            maxRetries: RETRY_CONFIG.maxRetries,
+            baseDelay: `${RETRY_CONFIG.baseDelay}ms`,
+            retryableStatuses: RETRY_CONFIG.retryableStatuses
+          },
+          idempotencyKeys: true
         }
       }
     });
